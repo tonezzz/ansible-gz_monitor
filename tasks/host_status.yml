@@ -1,0 +1,139 @@
+---
+
+- debug: var=opts_host_status
+- meta: end_play
+
+- name: Host status
+  tags: "{{gz_monitor.host_status | default('') }}"
+  block:
+  - name: Prepare host status
+    set_fact:
+      host_status:
+        instance:
+          hostname: "{{ansible_facts.hostname}}"
+          nodename: "{{ansible_facts.hostname}}"
+          fqdn: "{{ansible_facts.fqdn}}"
+          ip_v4: "{{ansible_all_ipv4_addresses}}"
+          #ip_v4_default: "{{ansible_defalt_ipv4_addresses}}"
+        memory:
+          total: "{{ (ansible_facts.memtotal_mb|float / 1024) | round(2,'common') }}GB"
+          free: "{{ (ansible_facts.memfree_mb|float / 1024) | round(2,'common') }}GB"
+          swap_total: "{{ (ansible_facts.swaptotal_mb|float / 1024) | round(2,'common') }}GB"
+          swap_free: "{{ (ansible_facts.swapfree_mb|float / 1024) | round(2,'common') }}GB"
+        disk:
+          total: "{{ (ansible_facts.mounts[0].size_total|float / 1024|pow(3)) | round(2,'common') }}GB"
+          available: "{{ (ansible_facts.mounts[0].size_available|float / 1024|pow(3)) | round(2,'common') }}GB"
+        metas:
+          host_id: "{{inventory_hostname}}"
+          host_time: "{{ansible_date_time.iso8601}}"
+        cpu:
+          type: "{{ansible_facts.machine}}"
+          name: "{{ansible_facts.processor[2]}}"
+          count: "{{ ansible_facts.cmdline.nr_cpus | default(omit) }}"
+        os:
+          system: "{{ansible_facts.system}}"
+          distribution: "{{ansible_facts.distribution | default('-') }}"
+          release: "{{ansible_facts.distribution_release | default('-') }}"
+          version: "{{ansible_facts.distribution_version | default('-') }}"
+          version_major: "{{ansible_facts.distribution_major_version | default('-') }}"
+        ansible:
+          distribution: "{{ansible_distribution | default('-') }}"
+          ansible_distribution_release : "{{ansible_distribution_release | default('-') }}"
+          version: "{{ansible_distribution_version | default('-') }}"
+          version_major: "{{ansible_distribution_major_version | default('-') }}"
+        #ansible_facts:  "{{ansible_facts}}"
+
+  - name: Save to file
+    delegate_to: localhost
+    tags: "{{ '' if opts_host_status.to_file is defined else 'never' }}"
+    block:
+    - ansible.builtin.file:  path="{{opts_host_status.to_file.path}}" state=directory
+    - copy:  content={{host_status}} dest="{{opts_host_status.to_file.path}}{{opts_host_status.to_file.file_name}}"
+
+  - name: Save to GSheet
+    delegate_to: localhost
+    tags: "{{ '' if opts_host_status.to_gsheet is defined else 'never' }}"
+    vars:
+      header_row:
+      - time
+      - host_id
+      - IP
+      - Type
+      - CPUs
+      - OS
+      - release
+      - Mem_GB
+      - Mem_used
+      - Mem_free
+      - Swap_GB
+      - Swap_used
+      - Swap_free
+      - Disk_GB
+      - Disk_free
+    block:
+    #- debug: var=host_status
+    - name: Add header
+      tags: never
+      run_once: yes
+      gz.gsheet2:
+        readonly: No
+        credit_data: "{{opts_host_status.to_gsheet.credit_data | default(omit) }}"
+        credit_file: "{{opts_host_status.to_gsheet.credit_file | default(omit) }}"
+        wksheet_id: "{{opts_host_status.to_gsheet.wksheet_id}}"
+        update:
+          value_input_option: USER_ENTERED
+          range: "{{opts_host_status.to_gsheet.sheet_name}}!A1:O2" #"{{opts_host_status.to_gsheet.range}}"
+          values:
+          - [''] #["{{ansible_date_time.iso8601}}"]
+          - "{{header_row}}"
+    - name: Add data
+      vars:
+        data_row:
+        - "{{ansible_date_time.iso8601}}"
+        - "{{host_status.metas.host_id}}"
+        - "{{host_status.instance.ip_v4[0]}}"
+        - "{{host_status.cpu.type}}"
+        - "{{host_status.cpu.count | default('-')}}"
+        - "{{host_status.os.distribution}}"
+        - "{{host_status.os.version}}"
+        - "{{ ansible_facts.memory_mb.real.total    | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.memory_mb.real.used     | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.memory_mb.real.free     | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.memory_mb.swap.total    | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.memory_mb.swap.used     | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.memory_mb.swap.free     | gz_units(t='GB',s='MB') }}"
+        - "{{ ansible_facts.mounts[0].size_total    | gz_units(t='GB') }}"
+        - "{{ ansible_facts.mounts[0].size_available | gz_units(t='GB') }}"
+      gz.googleapi:
+        build:
+          google_resource: 'sheets'
+          api_version: 'v4'
+          credit_file: "{{credit_file}}"
+          scopes: ['https://www.googleapis.com/auth/spreadsheets']
+          spreadsheets:
+            batchupdate:
+              spreadsheetId: "{{wksheet_id}}"
+              requests:
+              #- insertRange:
+              #    range:
+              #      sheetId: "{{opts_host_status.to_gsheet.sheet_id}}"
+              #      startRowIndex: "{{opts_host_status.to_gsheet.row_id}}"
+              #      endRowIndex: "{{opts_host_status.to_gsheet.row_id + 1 }}"
+              #    shiftDimension: ROWS
+              - updateCells:
+                  range: #'status_host!A15:B'
+                    sheetId: "{{opts_host_status.to_gsheet.sheet_id}}"
+                    startRowIndex: "{{opts_host_status.to_gsheet.row_id}}"
+                    endRowIndex: "{{opts_host_status.to_gsheet.row_id + 1 }}" #will clean up
+                    #startColumnIndex: 1
+                    #endColumnIndex: 2
+                  fields: '*'
+                  rows:
+                  - values: "{{ data_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list }}"
+              #- appendCells:
+              #    sheetId: "{{opts_host_status.to_gsheet.sheet_id}}"
+              #    fields: '*' #'effectiveValue'
+              #    rows:
+              #    - values: "{{ data_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list }}"
+      register: rs
+    - debug: var=rs

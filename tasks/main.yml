@@ -1,0 +1,14 @@
+---
+
+- name: Prepare
+  tags: never
+  vars:
+    gz_monitor:
+      apt: "{{ '' if (opts_monitor.apt is defined) else 'never'}}"
+      host_status: "{{ '' if (opts_monitor.host_status is defined) else 'never'}}"
+      to_file: "{{ '' if (opts_monitor.host_status.to_file is defined) else 'never'}}"
+      to_gsheet: "{{ '' if (opts_monitor.host_status.to_gsheet is defined) else 'never'}}"
+  block:
+  - {name: Apt install, include_tasks: apt.yml }
+  - {name: Host status ,vars: {opts_host_status: "{{opts_monitor.host_status}}"} ,include_tasks: host_status.yml }
+

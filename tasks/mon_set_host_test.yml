@@ -1,0 +1,132 @@
+---
+
+################
+- name: Services data
+  tags: "{{ '' if (opts_mon_host.do.services is defined) else 'never' }}"
+  block:
+  ########
+  - name: Populate service facts
+    delegate_to: "{{inventory_hostname}}"
+    ignore_errors: yes
+    ansible.builtin.service_facts:
+  - name: service_info
+    run_once: yes
+    block:
+    - name: Data sorting
+      ignore_errors: yes
+      loop: "{{ ansible_play_hosts | product(opts_mon_host.services) | list }}"
+      vars:
+        hh: "{{item[0]}}"
+        ss: "{{item[1]}}"
+        service_item: "{{ {hh: {ss: hostvars[hh].services[ss].state|default(omit) } } }}"
+      set_fact:
+        service_info: "{{ service_info|default({}) | combine(service_item,recursive=true) }}"
+    - name: service_rows
+      ignore_errors: yes
+      loop: "{{ q('dict',service_info) }}"
+      vars:
+        _service_row: "{{ q('dict',item.value)|map(attribute='value') | list }}"
+        service_row: "{{ _service_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list }}"
+      set_fact:
+        service_rows: "{{ service_rows|default({}) | combine({item.key: service_row},recursive=true) }}"
+- name: Service head row preparing
+  run_once: yes
+  loop: "{{ q('dict',opts_mon_host.services) }}"
+  set_fact:
+    service_header_row: "{{ service_header_row|default([]) + [item.key] }}"
+#################
+- name: Result output
+  run_once: yes
+  vars:
+    header_row:
+    - Time
+    - Host
+    - IPV4
+    - IPV6
+    - Type
+    - CPUs
+    - OS
+    - release
+    - Uptime
+    - Mem_GiB
+    - Mem_%
+    - Swap_GiB
+    - Swap_%
+    - Disk_GiB
+    - Disk_%
+  block:
+  ########
+  - name: header_row preparing
+    tags: "{{ opts_mon_host.do.header | default('never') }}"
+    vars:
+      sheet_row: "{{ {'values': (header_row + service_header_row) | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list } }}"
+      sheet_rows: "{{ [sheet_row] }}"
+      header_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_host.sheet_id}}"
+            startRowIndex: "{{opts_mon_host.start_row}}"
+            endRowIndex: "{{ opts_mon_host.start_row + 1 }}"
+            startColumnIndex: 0
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [header_request] }}"
+  ########
+  - name: Result rows preparing
+    tags: "{{ opts_mon_host.do.result | default('never') }}"
+    loop: "{{ ansible_play_hosts }}"
+    loop_control: {index_var: idx}
+    #when: item.item is defined
+    vars:
+      numberFormat: {numberFormat: {type: 'NUMBER' ,pattern: "#,##0.00"} }
+      #percentFormat: {numberFormat: {type: 'NUMBER' ,pattern: "[=0]\"n/a\";[>.75][Yellow]#0.00%;[>.95][Red]#0.00%;[>.99][Red]#0.00%;[Green]#0.00%" } }
+      percentFormat: {numberFormat: {type: 'NUMBER' ,pattern: "[>.95][Red]#0.00%;[>.90][Color45]#0.00%;[Color10]#0.00%" } }
+      integerFormat: {numberFormat: {type: 'NUMBER' ,pattern: "#,##0"} }
+      durationFormat: {horizontalAlignment: RIGHT }
+      #durationFormat: {datetimeFormat: {type: 'NUMBER' ,pattern: "#,##0.00"} }
+      #numberFormat: {numberFormat: {type: 'NUMBER' ,pattern: "#,##0.00"} ,textFormat: {textColor: '#FF0000'} }
+      sheet_row:
+      - {userEnteredValue: {stringValue: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S%z') }}"  } }
+      - {userEnteredValue: {stringValue: "{{ item }}"  } }
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_default_ipv4.address  | default('-') }}" }}
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_default_ipv6.address  | default('-') }}" }}
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_architecture          | default('-')}}" }}
+      - {userEnteredValue: {numberValue: "{{hostvars[item].ansible_processor_vcpus       | default('-') }}" } ,userEnteredFormat: "{{integerFormat}}" }
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_distribution          | default('-') }}" }}
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_distribution_version  | default('-') }}" }}
+      - {userEnteredValue: {stringValue: "{{hostvars[item].ansible_uptime_seconds|default('n/a')|gz_duration }}" } ,userEnteredFormat: "{{durationFormat}}" }
+      - {userEnteredValue: {numberValue: "{{hostvars[item].ansible_memtotal_mb                    | gz_units(t='GiB',s='MiB') }}" } ,userEnteredFormat: "{{numberFormat}}" }
+      - {userEnteredValue: {numberValue: "{{1-hostvars[item].ansible_memfree_mb/hostvars[item].ansible_memtotal_mb}}" }           ,userEnteredFormat: "{{percentFormat}}" }
+      - {userEnteredValue: {numberValue: "{{hostvars[item].ansible_swaptotal_mb                   | gz_units(t='GiB',s='MiB') }}" } ,userEnteredFormat: "{{numberFormat}}" }
+      - {userEnteredValue: {numberValue: "{{1-hostvars[item].ansible_swapfree_mb/hostvars[item].ansible_swaptotal_mb if hostvars[item].ansible_swaptotal_mb>0 else 0}}" } ,userEnteredFormat: "{{percentFormat}}" }
+      - {userEnteredValue: {numberValue: "{{(hostvars[item].ansible_mounts|json_query('[?mount==`/`].size_total'))[0]  | gz_units(t='GiB') }}" } ,userEnteredFormat: "{{numberFormat}}" }
+      - {userEnteredValue: {numberValue: "{{1-(hostvars[item].ansible_mounts|json_query('[?mount==`/`].size_available'))[0]/(hostvars[item].ansible_mounts|json_query('[?mount==`/`].size_total'))[0] }}" } ,userEnteredFormat: "{{percentFormat}}" }
+      sheet_rows: "{{ [{'values': sheet_row + service_rows[item]|default([]) }] }}"
+      result_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_host.sheet_id}}"
+            startRowIndex: "{{opts_mon_host.start_row + idx + 1}}"
+            #endRowIndex: "{{ opts_mon_host.start_row + idx + 2 }}"
+            startColumnIndex: 0
+          fields: '*'
+          rows: "{{ sheet_rows }}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [result_request] }}"
+  #  debug: var=service_rows
+  #- meta: end_play
+  ########
+  - name: Save to GSheet
+    gz.googleapi:
+      build:
+        google_resource: 'sheets'
+        api_version: 'v4'
+        credit_file: "{{opts_mon_host.access_info.credit_file}}"
+        scopes: "{{opts_mon_host.access_info.scopes}}"
+        spreadsheets:
+          batchUpdate:
+            spreadsheetId: "{{opts_mon_host.access_info.wksheet_id}}"
+            requests: "{{sheet_requests}}"
+    register: rs
+  - debug: var=rs

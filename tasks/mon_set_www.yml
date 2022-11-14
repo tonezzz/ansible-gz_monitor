@@ -1,0 +1,120 @@
+---
+
+################
+- name: Input preparing
+  run_once: yes
+  block:
+  ########
+  - name: GSheet reading
+    gz.googleapi:
+      build:
+        google_resource: 'sheets'
+        api_version: 'v4'
+        credit_file: "{{opts_mon_www.access_info.credit_file}}"
+        scopes: "{{opts_mon_www.access_info.scopes}}"
+        spreadsheets:
+          get:
+            spreadsheetId: "{{opts_mon_www.access_info.wksheet_id}}"
+            ranges: "{{opts_mon_www.input_ranges}}"
+    register: output
+  ########
+  - name: www_items preparing
+    loop: "{{output.rs.sheets[0].data[0].rowData}}"
+    loop_control: {index_var: idx}
+    when: (hh|length>0) and (url|length>0)
+    vars:
+      hh: "{{item['values'][0].effectiveValue.stringValue | default('') }}"
+      url: "{{item['values'][1].effectiveValue.stringValue | default('') }}"
+    set_fact:
+      www_items: "{{ www_items|default({}) | combine({idx: {'host': hh ,'url': url} },recursive=True) }}"
+################
+- name: Get url status list
+  ignore_errors: yes
+  delegate_to: "{{item.host | default('localhost') }}"
+  loop: "{{ q('dict',www_items) }}"
+  uri: url="{{item.value.url}}" method=get return_content=no validate_certs="{{ 'yes' if item.value.url|regex_search('^https://') else 'no' }}"
+  register: output_items
+################
+- name: Result output
+  vars:
+    header_row:
+    - Time
+    - Status
+    - Length
+    - Server
+    - Procal
+    - _powered_by
+    - _pagespeed
+    - Redirected
+    - r_url
+  block:
+  ########
+  - name: header_row preparing
+    tags: "{{ opts_mon_www.do.header | default('never') }}"
+    vars:
+      sheet_row: "{{ {'values': header_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list } }}"
+      sheet_rows: "{{ [sheet_row] }}"
+      header_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_www.sheet_id}}"
+            startRowIndex: "{{opts_mon_www.start_row}}"
+            endRowIndex: "{{ opts_mon_www.start_row + 1 }}"
+            startColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [header_request] }}"
+  ######## row_id
+  - name: Result rows preparing
+    tags: "{{ opts_mon_www.do.result | default('never') }}"
+    loop: "{{ output_items.results }}"
+    when: item.item is defined
+    vars:
+      sheet_row:
+      - {userEnteredValue: {stringValue: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S%z') }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.status | default('-')  | quote }}"  } ,note: "{{item.msg|default(omit)}}" }
+      - {userEnteredValue: {stringValue: "{{item.content_length|default('n/a') | gz_units(u='MB',f='{:.3f}') }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.server | default('-') }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.upgrade | default('-')  }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.x_powered_by | default('-')  }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.x_mod_pagespeed | default('-')  }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.redirected | default('-')  | string }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.url|default('-') if item.redirected|bool else '-' }}"  } }
+      sheet_rows: "{{ [{'values': sheet_row}] }}"
+      result_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_www.sheet_id}}"
+            startRowIndex: "{{opts_mon_www.start_row + item.item.key + 1}}"
+            endRowIndex: "{{ opts_mon_www.start_row + item.item.key + + 2 }}"
+            startColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [result_request] }}"
+  ########
+  - name: Save to GSheet
+    vars:
+      data_cells:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_www.sheet_id}}"
+            startRowIndex: "{{opts_mon_www.start_row}}"
+            #endRowIndex: "{{opts_mon_www.row_id + data_rows|length }}" #will clean up range
+            startColumnIndex: 2
+            #endColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    gz.googleapi:
+      build:
+        google_resource: 'sheets'
+        api_version: 'v4'
+        credit_file: "{{opts_mon_www.access_info.credit_file}}"
+        scopes: "{{opts_mon_www.access_info.scopes}}"
+        spreadsheets:
+          batchUpdate:
+            spreadsheetId: "{{opts_mon_www.access_info.wksheet_id}}"
+            requests: "{{sheet_requests}}"
+    register: rs
+  - debug: var=rs

@@ -1,0 +1,6 @@
+---
+
+gz_monitor_config: {
+  status_file: "{{inventory_hostname}}.json"
+
+}

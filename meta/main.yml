@@ -1,0 +1,22 @@
+---
+dependencies: {}
+
+galaxy_info:
+  role_name: 'gz_monitor'
+  auther: 'tonezzz'
+  description: 'System Monitoring'
+  company: 'Surf Thailand'
+  license: 'Open'
+  min_ansible_version: 2.4
+  platforms:
+  - name: 'Debian'
+    versions:
+    - 9
+  - name: 'Ubuntu'
+    versions:
+    - trusty
+    #- xenial
+    #- bionic
+  galaxy_tags:
+  - monitor
+allow_duplicates: true

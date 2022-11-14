@@ -1,0 +1,63 @@
+  - name: Test gz.googleapi
+    tags: never
+    block:
+    - name: test
+      delegate_to: localhost
+      vars:
+        data_rows:
+        - A
+        - B
+      gz.googleapi:
+        build:
+          google_resource: 'sheets'
+          api_version: 'v4'
+          credit_file: "{{credit_file}}"
+          scopes: ['https://www.googleapis.com/auth/spreadsheets']
+          spreadsheets:
+            batchupdate:
+              spreadsheetId: "{{wksheet_id}}"
+              requests:
+              - updateSpreadsheetProperties:
+                  properties: {title: Test Python googleapi.gsheet}
+                  fields: title
+              #- insertRange:    #Insert a row  before pasting
+              #    range: #'status_host!A13:C'
+              #      sheetId: 1207365552
+              #      startRowIndex: 1
+              #      endRowIndex: 2
+              #    shiftDimension: ROWS
+              #- pasteData:
+              #    data: 'YX,B,C'
+              #    #- A
+              #    #- B
+              #    #- C
+              #    type: PASTE_NORMAL
+              #    delimiter: ','
+              #    #coordinate: 'status_host!A13'
+              #      #sheetId: 1207365552
+              #      #rowIndex: 13
+              - updateCells:
+                  range: #'status_host!A15:B'
+                    sheetId: "{{opts_host_status.to_gsheet.sheet_id}}"
+                    startRowIndex: "{{opts_host_status.to_gsheet.row_id}}"
+                    endRowIndex: "{{opts_host_status.to_gsheet.row_id + 1}}" #will clean up
+                    #startColumnIndex: 1
+                    #endColumnIndex: 2
+                  fields: '*'
+                  rows:
+                    - values: "{{ data_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list }}"
+              - updateCells:
+                  range: #'status_host!A15:B'
+                    sheetId: 1207365552
+                    startRowIndex: 16
+                    endRowIndex: 17
+                    startColumnIndex: 1
+                    endColumnIndex: 2
+                  fields: '*'
+                  rows:
+                    - values:
+                      - userEnteredValue:
+                          stringValue: "{{ansible_date_time.iso8601}}"
+                  
+      register: rs
+    - debug: var=rs

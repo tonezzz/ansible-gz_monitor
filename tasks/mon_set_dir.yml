@@ -1,0 +1,197 @@
+---
+
+################ 
+- name: Input preparing
+  run_once: yes
+  block:
+  ########
+  - name: GSheet reading
+    gz.googleapi:
+      build:
+        google_resource: 'sheets'
+        api_version: 'v4'
+        credit_file: "{{opts_mon_dir.access_info.credit_file}}"
+        scopes: "{{opts_mon_dir.access_info.scopes}}"
+        spreadsheets:
+          get:
+            spreadsheetId: "{{opts_mon_dir.access_info.wksheet_id}}"
+            ranges: "{{opts_mon_dir.input_ranges}}"
+    register: output
+  ########
+  - name: dir_items preparing
+    loop: "{{output.rs.sheets[0].data[0].rowData}}"
+    loop_control: {index_var: idx}
+    when: (hh|length>0) and (dir|length>0)
+    vars:
+      hh: "{{item['values'][0].effectiveValue.stringValue | default('') }}"
+      dir: "{{item['values'][1].effectiveValue.stringValue | default('') }}"
+    set_fact:
+      #dir_items: "{{ dir_items|default({}) | combine({hh: {'row_id': idx ,'dir': dir} },recursive=True) }}"
+      dir_items: "{{ dir_items|default({}) | combine({idx: {'host': hh ,'dir': dir} },recursive=True) }}"
+################
+- name: Data gathering
+  run_once: yes
+  block:
+  ########
+  - name: Stat info
+    tags: "{{ opts_mon_dir.do.stat | default('never') }}"
+    block:
+    - name: Get stats info
+      ignore_errors: yes
+      delegate_to: "{{item.value.host}}"
+      loop: "{{ q('dict',dir_items) }}"
+      stat:
+        path: "{{item.value.dir}}"
+      register: output
+  #- name: Test
+  #  vars:
+  #    selected_item: "{{ dir_items | dict2items | selectattr('value.host','==','sd01h01') | selectattr('value.dir','==','/var/www') | list }}"
+  #  debug: var=selected_item
+  #- meta: end_play
+  #- block:
+    - name: Extract stats info from output
+      loop: "{{output.results}}"
+      when: item.stat is defined
+      vars:
+        stat_info:
+          exists: "{{item.stat.exists}}"
+          gid: "{{item.stat.gid | default('n/a') }}"
+          access: |
+            {{item.stat.pw_name | default('-') }}:{{item.stat.gr_name | default('-') }}
+          mimetype: "{{item.stat.mimetype | default('n/a') }}"
+        #sel_item: "{{ dir_items | dict2items | selectattr('value.host','==',item.item.value.host) | selectattr('value.dir','==',item.item.value.dir) | list }}"
+      set_fact:
+        #dir_items: "{{ dir_items | combine( {sel_item[0].key: stat_info} ,recursive=True) }}"
+        dir_items: "{{ dir_items | combine( {item.item.key: stat_info} ,recursive=True) }}"
+  ########
+  - name: Get sub tree
+    tags: "{{ opts_mon_dir.do.tree | default('never') }}"
+    block:
+    - name: Get tree info
+      ignore_errors: yes
+      delegate_to: "{{item.value.host}}"
+      loop: "{{ q('dict',dir_items) }}"
+      when: (item.value.exists|default(False))
+      command: "tree -h -L 1 {{item.value.dir}}"
+      register: output
+    - name: Extract tree info from output
+      loop: "{{output.results}}"
+      vars:
+        content: "{{ item.stdout if (item.stdout is defined) else item.stderr|default('-') }}"
+      set_fact:
+        #dir_items: "{{ dir_items | combine({item.item.key: {'tree': item.stdout|default('-') } },recursive=True) }}"
+        dir_items: "{{ dir_items | combine({item.item.key: {'tree': content } },recursive=True) }}"
+  ########
+  - name: Get sub ls
+    tags: "{{ opts_mon_dir.do.ls | default('never') }}"
+    block:
+    - name: Get ls info
+      ignore_errors: yes
+      delegate_to: "{{item.value.host}}"
+      loop: "{{ q('dict',dir_items) }}"
+      when: (item.value.exists|default(False))
+      command: "ls -lah {{item.value.dir}}"
+      register: output
+    - name: Extract ls info from output
+      loop: "{{output.results}}"
+      when: item.stdout is defined
+      set_fact:
+        dir_items: "{{ dir_items | combine({item.item.key: {'ls': item.stdout} },recursive=True) }}"
+  ########
+  - name: Get dir size list
+    tags: "{{ opts_mon_dir.do.size | default('never') }}"
+    block:
+    - name: Get dir size list
+      ignore_errors: yes
+      delegate_to: "{{item.value.host}}"
+      loop: "{{ q('dict',dir_items) }}"
+      when: (item.value.exists|default(False))
+      command: "du -skh {{item.value.dir}}"
+      register: output
+    - name: Extract dir_size from output
+      loop: "{{output.results}}"
+      when: item.stdout is defined
+      set_fact:
+        dir_items: "{{ dir_items | combine({item.item.key: {'dir_size': item.stdout.split()[0]} },recursive=True) }}"
+#- meta: end_play
+################
+- name: Result output
+  run_once: yes
+  vars:
+    header_row:
+    - Time
+    - Size
+    - Type
+    - Access
+  block:
+  ########
+  - name: header_row preparing
+    tags: "{{ opts_mon_dir.do.header | default('never') }}"
+    vars:
+      sheet_row: "{{ {'values': header_row | gz_lists2dicts(['stringValue']) | gz_lists2dicts(['userEnteredValue']) | list } }}"
+      #sheet_rows: "{{ sheet_rows|default([]) + [sheet_row] }}"
+      sheet_rows: "{{ [sheet_row] }}"
+      header_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_dir.sheet_id}}"
+            startRowIndex: "{{opts_mon_dir.start_row}}"
+            endRowIndex: "{{ opts_mon_dir.start_row + 1 }}"
+            startColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [header_request] }}"
+  ######## row_id
+  - name: Result rows preparing
+    tags: "{{ opts_mon_dir.do.result | default('never') }}"
+    loop: "{{ q('dict',dir_items) }}"
+    vars:
+      file_row:
+      #- {value: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S%z') }}"   }
+      sheet_row:
+      - {userEnteredValue: {stringValue: "{{ lookup('pipe', 'date +%Y-%m-%dT%H:%M:%S%z') }}"  } }
+      - {userEnteredValue: {stringValue: "{{item.value.dir_size|default('-')}}"  }   ,note: "{{item.value.tree|default(omit)}}" }
+      - {userEnteredValue: {stringValue: "{{item.value.mimetype|default('-')}}"  }   ,note: "{{item.value.ls|default(omit)}}" }
+      - {userEnteredValue: {stringValue: "{{item.value.access|default('-')|trim}}"          } }
+      #sheet_rows: "{{ sheet_rows|default([]) + [{'values': sheet_row}] }}"
+      sheet_rows: "{{ [{'values': sheet_row}] }}"
+      header_request:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_dir.sheet_id}}"
+            startRowIndex: "{{opts_mon_dir.start_row + item.key + 1}}"
+            endRowIndex: "{{ opts_mon_dir.start_row + item.key + + 2 }}"
+            startColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    set_fact:
+      sheet_requests: "{{ sheet_requests|default([]) + [header_request] }}"
+  ########
+  - name: Save to GSheet
+    vars:
+      data_cells:
+        updateCells:
+          range:
+            sheetId: "{{opts_mon_dir.sheet_id}}"
+            startRowIndex: "{{opts_mon_dir.start_row}}"
+            #endRowIndex: "{{opts_mon_dir.row_id + data_rows|length }}" #will clean up
+            startColumnIndex: 2
+            #endColumnIndex: 2
+          fields: '*'
+          rows: "{{sheet_rows}}"
+    gz.googleapi:
+      build:
+        google_resource: 'sheets'
+        api_version: 'v4'
+        credit_file: "{{opts_mon_dir.access_info.credit_file}}"
+        scopes: "{{opts_mon_dir.access_info.scopes}}"
+        spreadsheets:
+          batchUpdate:
+            spreadsheetId: "{{opts_mon_dir.access_info.wksheet_id}}"
+            requests: "{{sheet_requests}}"
+            #- "{{data_cells}}"
+            #- "{{format_color}}"
+            #- "{{chart_in_row}}"
+    register: rs
+  - debug: var=rs
