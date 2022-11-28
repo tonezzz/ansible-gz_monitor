@@ -1,29 +1,29 @@
 ---
 
-- name: mon_host
+- name: mon_host_test
   tags: "{{ '' if opts_mon_set.mon_host_test.do|default(False) else 'never' }}"
-  when: (opts_mon_set.mon_host_test is defined)
+  when: (opts_mon_set.mon_host_test|default(false)) 
   vars:
     opts_mon_host: "{{ opts_mon_set.mon_host_test | combine( {'access_info': opts_mon_set.access_info} ) }}"
   include_tasks: mon_set_host_test.yml
 
 - name: mon_host
   tags: "{{ '' if opts_mon_set.mon_host.do|default(False) else 'never' }}"
-  when: (opts_mon_set.mon_host is defined)
+  when: (opts_mon_set.mon_host|default(false))
   vars:
     opts_mon_host: "{{ opts_mon_set.mon_host | combine( {'access_info': opts_mon_set.access_info} ) }}"
   include_tasks: mon_set_host.yml
 
 - name: mon_www
   tags: "{{ '' if opts_mon_set.mon_www.do|default(False) else 'never' }}"
-  when: (opts_mon_set.mon_www is defined)
+  when: (opts_mon_set.mon_www|default(false))
   vars:
     opts_mon_www: "{{ opts_mon_set.mon_www | combine( {'access_info': opts_mon_set.access_info} ) }}"
   include_tasks: mon_set_www.yml
 
 - name: mon_dir
   tags: "{{ '' if opts_mon_set.mon_dir.do|default(False) else 'never' }}"
-  when: (opts_mon_set.mon_dir is defined)
+  when: (opts_mon_set.mon_dir|default(false))
   vars:
     opts_mon_dir: "{{ opts_mon_set.mon_dir | combine( {'access_info': opts_mon_set.access_info} ) }}"
   include_tasks: mon_set_dir.yml
